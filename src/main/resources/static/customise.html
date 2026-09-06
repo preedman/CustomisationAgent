@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customise Application</title>
+</head>
+<body>
+<h1>Customise Application</h1>
+
+<p>
+    Enter a customer specification and acceptance criteria below.
+    The customisation agent will use these details to update the application.
+</p>
+
+<form id="customisationForm">
+    <div>
+        <label for="specification">Specification</label>
+        <br>
+        <textarea
+                id="specification"
+                name="specification"
+                rows="10"
+                cols="80"
+                placeholder="Describe the application change you want..."
+                required></textarea>
+    </div>
+
+    <br>
+
+    <div>
+        <label for="acceptanceCriteria">Acceptance Criteria</label>
+        <br>
+        <textarea
+                id="acceptanceCriteria"
+                name="acceptanceCriteria"
+                rows="10"
+                cols="80"
+                placeholder="Describe how the change should be verified..."
+                required></textarea>
+    </div>
+
+    <br>
+
+    <button type="submit" id="submitCustomisation">Submit Customisation</button>
+</form>
+
+<h2>Result</h2>
+<textarea
+        id="customisationResult"
+        rows="8"
+        cols="80"
+        readonly
+        placeholder="The customisation result will appear here..."></textarea>
+
+<script>
+    document.getElementById('customisationForm').addEventListener('submit', async function (event) {
+        event.preventDefault();
+
+        const resultElement = document.getElementById('customisationResult');
+        const submitButton = document.getElementById('submitCustomisation');
+
+        const specification = document.getElementById('specification').value;
+        const acceptanceCriteria = document.getElementById('acceptanceCriteria').value;
+
+        resultElement.value = 'Submitting customisation request...';
+        submitButton.disabled = true;
+
+        try {
+            const response = await fetch('/api/customisations', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    specification: specification,
+                    acceptanceCriteria: acceptanceCriteria
+                })
+            });
+
+            const responseBody = await response.json();
+            const message = responseBody.result || 'No result message was returned.';
+
+            if (response.ok) {
+                resultElement.value = message;
+            } else {
+                resultElement.value = 'Customisation request failed. ' + message;
+            }
+        } catch (error) {
+            resultElement.value = 'Error submitting customisation request. ' + error.message;
+        } finally {
+            submitButton.disabled = false;
+        }
+    });
+</script>
+</body>
+</html>

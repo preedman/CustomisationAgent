@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Task Tracker</title>
+</head>
+<body>
+    <h1>Task Tracker</h1>
+
+    <p>
+        <a href="/customise.html">Customise this application</a>
+    </p>
+
+    <form id="taskForm" action="/tasks" method="POST">
+        <div>
+            <label for="taskName">Task Name</label>
+            <input type="text" id="taskName" name="taskName" placeholder="Enter task name" required>
+        </div>
+        <div>
+            <input type="checkbox" id="urgent" name="urgent">
+            <label for="urgent">Urgent</label>
+        </div>
+        <div>
+            <button type="submit" id="submitBtn">Submit</button>
+        </div>
+    </form>
+
+    <div id="result"></div>
+
+    <script>
+        document.getElementById('taskForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            const taskName = document.getElementById('taskName').value;
+            const isUrgent = document.getElementById('urgent').checked;
+            try {
+                const response = await fetch('/tasks', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        task_name: taskName,
+                        urgent: isUrgent
+                    })
+                });
+                if (response.ok) {
+                    const savedTask = await response.json();
+                    const result = document.getElementById('result');
+
+                    result.innerHTML = `
+                        <h2>Task Created Successfully</h2>
+                        <dl>
+                            <dt>ID</dt>
+                            <dd>${savedTask.id}</dd>
+
+                            <dt>Task Name</dt>
+                            <dd>${savedTask.task_name || savedTask.taskName || taskName}</dd>
+
+                            <dt>Urgent</dt>
+                            <dd>${savedTask.urgent ? 'Yes' : 'No'}</dd>
+                        </dl>
+                    `;
+                } else {
+                    document.getElementById('result').innerText = 'Failed to create task';
+                }
+            } catch (err) {
+                document.getElementById('result').innerText = 'Error: ' + err.message;
+            }
+        });
+    </script>
+</body>
+</html>
