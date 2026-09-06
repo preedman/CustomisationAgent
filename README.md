@@ -26,6 +26,15 @@ The application includes a simple task tracker and a customisation interface whe
 - H2 Database
 - Maven
 - JUnit 5
+## Documentation
+
+Additional project documentation is available in the `documentation` folder:
+
+- [CustomisationAgentService](documentation/CustomisationAgentService.md) - documents the main customisation orchestration service.
+- [CustomisationController](documentation/CustomisationController.md) - documents the REST API used to submit customisation requests.
+- [CustomisationTools](documentation/CustomisationTools.md) - documents the tool operations used by the customisation agent.
+- 
+
 
 ## Running the Application
 
