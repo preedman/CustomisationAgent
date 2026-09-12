@@ -30,12 +30,15 @@ public class CustomisationAgentService {
      * Executes the customisation prompt using the configured Spring AI ChatClient with tool callbacks.
      */
     public String executeWithAi(String specification, String acceptanceCriteria) {
+        log.info("Executing customisation with AI - specification: '{}', acceptanceCriteria: '{}'",
+                specification, acceptanceCriteria);
         if (chatClientBuilder.isEmpty()) {
             log.warn("ChatClient.Builder not present, falling back to deterministic orchestrator.");
             return executeUrgentTaskCustomisation();
         }
 
         try {
+            log.debug("Configuring ChatClient with default tools and system prompt...");
             ChatClient chatClient = chatClientBuilder.get()
                     .defaultTools(tools)
                     .defaultSystem("""
@@ -58,12 +61,24 @@ public class CustomisationAgentService {
                 Please execute the customisation plan now using your tools.
                 """, specification, acceptanceCriteria);
 
-            return chatClient.prompt()
+            log.debug("Sending prompt to AI ChatClient:\n{}", prompt);
+            CustomisationAiResponse response = chatClient.prompt()
                     .user(prompt)
                     .call()
-                    .content();
+                    .entity(CustomisationAiResponse.class);
+
+            log.debug("Received structured AI response: {}", response);
+
+            if (response != null) {
+                String formattedResponse = response.toHumanReadableString();
+                log.info("AI customisation completed successfully with response: \n{}", formattedResponse);
+                return formattedResponse;
+            }
+
+            log.warn("AI response was null, falling back to deterministic customisation execution.");
+            return executeUrgentTaskCustomisation();
         } catch (Exception e) {
-            log.warn("AI execution encountered an issue ({}), falling back to deterministic customisation execution.", e.getMessage());
+            log.warn("AI execution encountered an issue ({}), falling back to deterministic customisation execution.", e.getMessage(), e);
             return executeUrgentTaskCustomisation();
         }
     }
@@ -156,6 +171,15 @@ public class Task {
 
     public void setUrgent(boolean urgent) {
         this.urgent = urgent;
+    }
+
+    @Override
+    public String toString() {
+        return "Task{" +
+                "id=" + id +
+                ", taskName='" + taskName + '\'' +
+                ", urgent=" + urgent +
+                '}';
     }
 }
 """;

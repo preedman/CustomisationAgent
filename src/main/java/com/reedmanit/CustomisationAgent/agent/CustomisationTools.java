@@ -31,11 +31,15 @@ public class CustomisationTools {
     @Tool(description = "Reads the entire content of a file given its relative path from the project root")
     public String readFile(@ToolParam(description = "Relative path to the file from the project root, e.g. src/main/java/com/reedmanit/CustomisationAgent/task/Task.java") String relativePath) {
         try {
+            log.debug("Reading file from relative path: {}", relativePath);
             Path targetPath = resolvePath(relativePath);
             if (!Files.exists(targetPath)) {
+                log.warn("File not found at relative path: {}", relativePath);
                 return "ERROR: File not found at " + relativePath;
             }
-            return Files.readString(targetPath, StandardCharsets.UTF_8);
+            String content = Files.readString(targetPath, StandardCharsets.UTF_8);
+            log.debug("Read {} characters from file: {}", content.length(), relativePath);
+            return content;
         } catch (Exception e) {
             log.error("Failed to read file: {}", relativePath, e);
             return "ERROR reading file: " + e.getMessage();
@@ -48,8 +52,10 @@ public class CustomisationTools {
             @ToolParam(description = "Exact existing code block to find and replace") String targetBlock,
             @ToolParam(description = "New code block to replace the target block with") String replacementBlock) {
         try {
+            log.debug("Attempting to apply code change to file: {}", relativePath);
             Path targetPath = resolvePath(relativePath);
             if (!Files.exists(targetPath)) {
+                log.warn("File not found for code change at relative path: {}", relativePath);
                 return "ERROR: File not found at " + relativePath;
             }
 
@@ -59,6 +65,7 @@ public class CustomisationTools {
             String normalizedReplacement = replacementBlock.replace("\r\n", "\n");
 
             if (!normalizedContent.contains(normalizedTarget)) {
+                log.warn("Target block not found in file: {}", relativePath);
                 return "ERROR: Target block not found in " + relativePath;
             }
 
@@ -77,8 +84,10 @@ public class CustomisationTools {
             @ToolParam(description = "Relative path to the file from the project root") String relativePath,
             @ToolParam(description = "Content to write into the file") String content) {
         try {
+            log.debug("Writing {} characters to file: {}", content != null ? content.length() : 0, relativePath);
             Path targetPath = resolvePath(relativePath);
             if (targetPath.getParent() != null && !Files.exists(targetPath.getParent())) {
+                log.debug("Creating parent directories for: {}", targetPath);
                 Files.createDirectories(targetPath.getParent());
             }
             Files.writeString(targetPath, content, StandardCharsets.UTF_8);
@@ -93,6 +102,7 @@ public class CustomisationTools {
     @Tool(description = "Executes the Maven test suite or a specific test class and returns the result")
     public String executeTestSuite(@ToolParam(description = "Optional test class name to target, or empty for all tests") String testClass) {
         try {
+            log.info("Executing Maven test suite for test class: {}", (testClass != null && !testClass.trim().isEmpty()) ? testClass.trim() : "ALL");
             boolean isWindows = System.getProperty("os.name", "").toLowerCase().contains("win");
             String mvnCmd = isWindows ? (Files.exists(projectRoot.resolve("mvnw.cmd")) ? projectRoot.resolve("mvnw.cmd").toString() : "mvn.cmd")
                     : (Files.exists(projectRoot.resolve("mvnw")) ? projectRoot.resolve("mvnw").toString() : "mvn");
@@ -107,6 +117,7 @@ public class CustomisationTools {
             pb.directory(projectRoot.toFile());
             pb.redirectErrorStream(true);
 
+            log.debug("Starting Maven test process with command: {}", pb.command());
             Process process = pb.start();
             StringBuilder output = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
@@ -118,6 +129,7 @@ public class CustomisationTools {
 
             boolean finished = process.waitFor(120, TimeUnit.SECONDS);
             if (!finished) {
+                log.error("Maven test execution timed out after 120 seconds");
                 process.destroyForcibly();
                 return "ERROR: Test execution timed out after 120 seconds.";
             }
@@ -125,6 +137,7 @@ public class CustomisationTools {
             int exitCode = process.exitValue();
             String fullOutput = output.toString();
             boolean success = exitCode == 0 && fullOutput.contains("BUILD SUCCESS");
+            log.debug("Maven test execution finished. Exit code: {}, Success: {}", exitCode, success);
 
             StringBuilder summary = new StringBuilder();
             summary.append("Execution Exit Code: ").append(exitCode).append("\n");
@@ -136,6 +149,7 @@ public class CustomisationTools {
                 }
             }
 
+            log.info("Test execution summary:\n{}", summary);
             return summary.toString();
         } catch (Exception e) {
             log.error("Failed to execute test suite", e);

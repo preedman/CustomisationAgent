@@ -75,4 +75,13 @@ public class Task {
     public void setUrgent(boolean urgent) {
         this.urgent = urgent;
     }
+
+    @Override
+    public String toString() {
+        return "Task{" +
+                "id=" + id +
+                ", taskName='" + taskName + '\'' +
+                ", urgent=" + urgent +
+                '}';
+    }
 }
