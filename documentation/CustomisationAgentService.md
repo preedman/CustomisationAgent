@@ -23,9 +23,10 @@ It supports two execution modes:
 - Accept acceptance criteria.
 - Build an AI prompt for the customisation task.
 - Register customisation tools with the AI chat client.
-- Ask the AI model to perform a four-step customisation plan.
-- Fall back to a built-in urgent-task customisation if AI support is unavailable or fails.
-- Use CustomisationTools to read files, write files, apply code changes, run tests, and complete the customisation process.
+- Instruct the AI model to stage all new and modified code in a separate review directory instead of overwriting existing project files.
+- Instruct the AI model to generate a markdown documentation file in the review directory describing what has been changed and what the new code does.
+- Fall back to a built-in urgent-task customisation if ChatClient.Builder is unavailable.
+- Use CustomisationTools to read files, stage files in the review folder, write markdown documentation, run tests, and complete the customisation process.
 
 ## Dependencies
 
@@ -96,33 +97,49 @@ executeUrgentTaskCustomisation()
 
 If a builder is available, it creates a ChatClient and registers CustomisationTools as the default tools.
 
-It also defines a system prompt that instructs the AI agent to follow a four-step customisation plan.
+It also defines a system prompt that instructs the AI agent to follow a multi-step customisation plan.
+
+Before invoking the chat client, `CustomisationAgentService` calls `cleanReviewDirectory()` directly to ensure stale files from previous runs are removed.
 
 ### AI Customisation Plan
 
 The system prompt asks the AI agent to follow these steps:
 
 1. Storage/Database Layer
-   Update JPA entities and tables to include requested fields.
+   Read existing entity files with `readFile` and write updated JPA entities to the separate review folder using `writeFile` or `applyCodeChange`.
 
 2. API/Controller Layer
-   Update controllers and endpoints to process and return new fields.
+   Read existing endpoints with `readFile` and write updated/new controllers to the review folder using `writeFile` or `applyCodeChange`.
 
 3. UI Layer
-   Update HTML views and JavaScript to include input fields and submit payloads.
+   Read existing views with `readFile` and write updated HTML/JS files to the review folder using `writeFile` or `applyCodeChange`.
 
-4. Verification
-   Run the test suite and complete the customisation process.
+4. Documentation
+   Generate and write a markdown documentation file (`DOCUMENTATION.md`) in the review folder using `writeDocumentation` explaining what has been changed and what the new code does.
+
+5. Verification
+   Optionally run the test suite using `executeTestSuite`.
+
+6. Completion
+   Complete the customisation process using `completeCustomisation`.
 
 ### Prompt Construction
 
 The method combines the customer specification and acceptance criteria into a single user prompt.
 
-The prompt asks the AI model to execute the customisation plan using the available tools.
+The prompt asks the AI model to execute the customisation plan using the available tools, directing new code and markdown documentation into the review folder.
+
+### AI Invocation & Multi-Turn Tool Calling
+
+The service calls the chat client using standard text/content evaluation (`.content()`) rather than constraining the response to a single-turn structured JSON schema (`.entity(...)`). This allows local and remote LLMs (such as Ollama models) to execute multiple tool turns (`readFile`, `writeFile`, `applyCodeChange`, `writeDocumentation`, `executeTestSuite`, `completeCustomisation`) uninterrupted.
+
+### Review Folder Verification
+
+Following the AI execution, `CustomisationAgentService` checks `tools.hasReviewFiles()` to confirm that modified or generated files actually exist in the `review/` staging directory. If the AI finishes or returns without executing any write tools (resulting in an empty review directory), the service detects this condition, logs an error, and returns an error response indicating that no files were staged.
 
 ### Error Handling
 
-If AI execution fails for any reason, the method logs a warning and falls back to the deterministic urgent-task workflow.
+If the AI execution throws an exception, returns without staging files, or fails to create content in the review folder, the method logs an error and stops processing, returning an error message instead of falling back to deterministic execution.
 
 ## executeUrgentTaskCustomisation
 
@@ -130,17 +147,15 @@ executeUrgentTaskCustomisation()
 
 This method provides a deterministic built-in customisation workflow.
 
-It implements the urgent-task feature without relying on AI model output.
+It implements the urgent-task feature staging all new/modified files and documentation in the review folder without relying on AI model output.
 
 ## Deterministic Urgent Task Workflow
 
 The workflow performs the following operations.
 
-### Step 1: Storage / Entity Update
+### Step 1: Storage / Entity Update in Review Folder
 
-The service reads the task entity file.
-
-If the task entity does not already contain an urgent field, the service writes an updated version of the task entity that includes urgent task support.
+The service reads the task entity file and writes the updated version containing urgent task support into the review directory (`review/src/main/java/com/reedmanit/CustomisationAgent/task/Task.java`).
 
 The updated task entity includes:
 
@@ -151,11 +166,9 @@ The updated task entity includes:
 - constructors
 - getter and setter methods
 
-### Step 2: UI / HTML View Update
+### Step 2: UI / HTML View Update in Review Folder
 
-The service reads the static task page.
-
-If the page does not already contain an urgent checkbox, the service writes an updated page containing:
+The service reads the static task page and writes an updated version into the review directory (`review/src/main/resources/static/index.html`) containing:
 
 - a task name input
 - an urgent checkbox
@@ -163,29 +176,36 @@ If the page does not already contain an urgent checkbox, the service writes an u
 - JSON submission to the task API
 - basic success and failure messaging
 
-### Step 3: Verification
+### Step 3: Markdown Documentation Generation
+
+The service generates a comprehensive Markdown documentation file (`review/DOCUMENTATION.md`) detailing:
+
+- An overview of the feature
+- Exact files and code changed across database and UI layers
+- Explanation of what the new code does
+- Review and implementation guidance for human reviewers
+
+### Step 4: Verification
 
 The service runs the Maven test suite for the repository test class.
 
 The test execution result is logged.
 
-### Step 4: Completion
+### Step 5: Completion
 
 The service calls the customisation completion tool with a summary message.
 
-The returned value indicates that the customisation process has completed.
+The returned value indicates that the customisation process has completed with staged changes and documentation ready for review.
 
 ## Fallback Behaviour
 
-The fallback behaviour is important because it allows the application to continue working even when AI configuration is missing or fails.
+The fallback behaviour allows the application to run the built-in urgent-task customisation when AI configuration (`ChatClient.Builder`) is not available.
 
 Fallback happens when:
 
-- ChatClient.Builder is not available
-- AI execution throws an exception
-- the configured AI model cannot complete the request
+- ChatClient.Builder is not present in the application context
 
-In these cases, the service performs the built-in urgent-task customisation instead.
+If an AI chat client is configured but execution fails or returns a null response, the service logs an error and stops processing without executing the fallback workflow.
 
 ## Logging
 
@@ -265,4 +285,4 @@ Recommended safeguards include:
 
 CustomisationAgentService is the central service that coordinates application customisation.
 
-It accepts a specification and acceptance criteria, attempts to use Spring AI with tool callbacks, and falls back to a deterministic urgent-task workflow if AI execution is unavailable or unsuccessful.
+It accepts a specification and acceptance criteria, attempts to use Spring AI with tool callbacks, and falls back to a deterministic urgent-task workflow if ChatClient.Builder is unavailable. If AI execution encounters an error or returns a null response, the service logs an error and halts execution without triggering the fallback.

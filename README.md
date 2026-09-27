@@ -13,7 +13,9 @@ The application includes a simple task tracker and a customisation interface whe
 - REST API for submitting customisation requests
 - Web screen for entering customisation specifications
 - Spring AI integration using Ollama
-- Tool-based customisation workflow for reading files, writing files, applying code changes, running tests, and completing customisations
+- Review-first customisation tools for staging changes into a dedicated `review` directory without overwriting existing files
+- Generation of markdown documentation describing what was changed and what the new code does
+- Maven test execution and customisation completion reporting
 
 ## Technology Stack
 

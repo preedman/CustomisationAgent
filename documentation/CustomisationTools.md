@@ -10,17 +10,21 @@ The class is part of the agent package and is designed to be registered as a too
 
 ## Purpose
 
-The purpose of CustomisationTools is to give the customisation agent controlled access to project-level operations.
+The purpose of CustomisationTools is to give the customisation agent controlled access to project-level operations while enforcing a human-review workflow.
+
+Instead of overwriting original files in place, all code additions and updates are written to a dedicated `review` directory.
 
 The class allows the agent to:
 
-- read files from the project
-- replace exact code blocks in files
-- write or overwrite files
+- clean or clear existing content in the review directory before writing new content
+- read files from the project or review folder
+- apply targeted code changes to files and stage the updated files in the review directory
+- write new or replacement files directly to the review directory
+- write markdown documentation in the review directory describing what was changed and what the new code does
 - run the Maven test suite
 - complete the customisation workflow with a summary message
 
-These operations are used by the customisation service when applying customer-requested application changes.
+These operations allow a human developer to review the proposed changes and accompanying documentation before implementing them in the main codebase.
 
 ## Spring Role
 
@@ -28,7 +32,7 @@ CustomisationTools is annotated as a Spring component.
 
 This means Spring can discover it automatically during component scanning and inject it into other classes, such as the customisation service.
 
-Because its public methods are annotated as tools, they can also be made available to a Spring AI chat client.
+Because its functional file and verification methods are annotated with `@Tool`, they can be made available to a Spring AI chat client, while directory lifecycle operations (such as `cleanReviewDirectory`) are managed directly by the orchestration service.
 
 ## Project Root
 
@@ -67,11 +71,49 @@ It also logs exceptions when file reading, file writing, code replacement, or te
 
 The log output helps diagnose customisation failures.
 
-## Tool Methods
+## Methods
 
-CustomisationTools exposes several tool methods.
+CustomisationTools exposes methods for review directory maintenance as well as tools callable by the customisation agent.
 
-These methods are intended to be called by the customisation agent during an automated customisation workflow.
+## cleanReviewDirectory
+
+cleanReviewDirectory()
+
+The cleanReviewDirectory method removes all existing files and subdirectories from the review folder if it exists, ensuring stale content from previous customisation runs is not mixed with new content. This is managed directly by the orchestration service prior to executing customisations to ensure a clean state for human review.
+
+### Behaviour
+
+The method:
+
+- checks whether the review directory exists
+- if it exists, traverses and deletes all files and subdirectories inside the review folder safely
+- logs the cleanup operation
+- returns a success message indicating the review folder content was removed, or that the folder did not exist
+
+If an exception occurs during deletion, it logs the error and returns an error message.
+
+### Typical Use
+
+The customisation agent or orchestrator calls this method before writing any new content or documentation to ensure a clean state for human review.
+
+## hasReviewFiles
+
+hasReviewFiles()
+
+The hasReviewFiles method inspects the review folder and determines whether any regular files are currently staged inside it.
+
+### Behaviour
+
+The method:
+
+- checks whether the review directory exists
+- if it exists, recursively traverses the directory tree using `Files.walk`
+- returns `true` if at least one regular file exists within the directory tree, `false` otherwise
+- logs any inspection errors and returns `false` safely if an exception occurs
+
+### Typical Use
+
+Used by `CustomisationAgentService` after AI execution to verify that files were actually written to disk before reporting customisation completion.
 
 ## readFile
 
@@ -106,7 +148,7 @@ The customisation agent uses this method before making changes, so it can inspec
 
 applyCodeChange(String relativePath, String targetBlock, String replacementBlock)
 
-The applyCodeChange method replaces an exact block of text in a file with another block of text.
+The applyCodeChange method replaces an exact block of text in a source file and writes the modified file to the separate `review` directory, keeping the original project file unchanged.
 
 The path must be relative to the project root.
 
@@ -122,15 +164,16 @@ replacementBlock is the new text that should replace the target block.
 
 The method:
 
-- resolves the target file path
-- checks whether the file exists
+- resolves the target path in the review folder and the original path in the project root
+- checks whether the file exists in the review folder or the project root
 - reads the file as UTF-8 text
 - normalises Windows line endings to Unix-style line endings
 - normalises the target block and replacement block in the same way
 - checks whether the file contains the target block
 - replaces the target block with the replacement block
-- writes the updated content back to the file
-- returns a success message
+- ensures parent directories exist in the review folder
+- writes the updated content to the review folder
+- returns a success message indicating the file was updated in the review folder
 
 If the file does not exist, it returns an error message.
 
@@ -138,67 +181,65 @@ If the target block cannot be found, it returns an error message.
 
 If an exception occurs, it logs the error and returns an error message.
 
-### Important Limitation
-
-This method requires an exact text match.
-
-If the spacing, indentation, or surrounding text changes, the target block may not be found.
-
-For larger or more flexible changes, writing the full file may be simpler, but it carries a higher risk of overwriting unrelated changes.
-
 ### Typical Use
 
-The customisation agent can use this method to make small, targeted edits such as:
-
-- adding a field to an entity
-- adding a line to a JSON payload
-- updating a response message
-- inserting a small block of HTML
-- changing a specific method body
+The customisation agent can use this method to make targeted modifications (such as adding entity fields or UI elements) staged in the review directory for human verification.
 
 ## writeFile
 
 writeFile(String relativePath, String content)
 
-The writeFile method writes content to a file.
+The writeFile method writes content to a file inside the separate `review` folder without modifying or overwriting existing project files.
 
-If the file already exists, it is overwritten.
-
-If the parent directories do not exist, they are created automatically.
+If parent directories in the review folder do not exist, they are created automatically.
 
 ### Parameters
 
 relativePath is the destination file path relative to the project root.
 
-content is the full content to write into the file.
+content is the full content to write into the review file.
 
 ### Behaviour
 
 The method:
 
-- resolves the target path
+- resolves the target path under the review directory
 - creates parent directories if required
 - writes the supplied content as UTF-8 text
 - logs a successful write
-- returns a success message
+- returns a success message indicating the file was written to the review folder
 
 If an exception occurs, it logs the error and returns an error message.
 
 ### Typical Use
 
-The customisation agent can use this method to:
+The customisation agent uses this method to stage full new files or complete updated files in the review folder for human inspection.
 
-- create new files
-- overwrite generated files
-- create tests
-- create documentation
-- replace an entire source file when exact block replacement is not suitable
+## writeDocumentation
 
-### Caution
+writeDocumentation(String relativePath, String content)
 
-Because this method overwrites the entire file, it should be used carefully.
+The writeDocumentation method creates a Markdown documentation file in the review directory explaining what has been changed and what the new code does.
 
-For existing source files, the agent should first read the current file and ensure that important content is preserved.
+### Parameters
+
+relativePath is the filename or relative path (e.g., `DOCUMENTATION.md`). If null or blank, it defaults to `DOCUMENTATION.md`.
+
+content is the Markdown text documenting the changes and functionality.
+
+### Behaviour
+
+The method:
+
+- resolves the documentation file path under the review directory
+- creates parent directories if required
+- writes the documentation content as UTF-8 Markdown text
+- logs a successful write
+- returns a success message
+
+### Typical Use
+
+The agent calls this tool after preparing code modifications to produce comprehensive documentation for human review before changes are applied.
 
 ## executeTestSuite
 

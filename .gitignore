@@ -4,6 +4,9 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 
+### Customisation Agent Review Folder ###
+review/
+
 ### STS ###
 .apt_generated
 .classpath
