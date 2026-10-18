@@ -34,32 +34,33 @@ This means Spring can discover it automatically during component scanning and in
 
 Because its functional file and verification methods are annotated with `@Tool`, they can be made available to a Spring AI chat client, while directory lifecycle operations (such as `cleanReviewDirectory`) are managed directly by the orchestration service.
 
-## Project Root
+## Project Root and Review Directory
 
-The class stores a project root path.
+The class stores two paths:
 
-All file operations are resolved relative to this project root.
+- the project root, which original files are read from
+- the review directory, which all new and modified files are written to
 
-There are two constructors:
+There are three constructors:
 
-1. A default constructor.
-2. A constructor that accepts a custom project root.
+1. A default constructor, which uses the current working directory as the project root.
+2. A constructor that accepts a custom project root. The review directory defaults to `review` under that root.
+3. A constructor that accepts both a project root and a review directory. A relative review directory is resolved against the project root; an absolute one is used as given.
 
-The default constructor uses the current working directory as the project root.
+Spring uses the default constructor, so in the running application the review directory is `<working directory>/review`.
 
-The custom project root constructor is useful for tests, because tests can provide a temporary directory and avoid modifying the real project files.
+The two-argument constructor is useful for tests, because tests can read from the real project while staging output in a temporary directory, avoiding any change to the real `review` folder.
 
 ## Path Safety
 
-Before reading or writing a file, the class resolves the requested relative path against the project root.
+Before reading or writing a file, the class resolves the requested relative path and normalises it.
 
-It normalises the resolved path and checks that the result still starts with the project root.
+- Reads are resolved against the project root and must stay inside it (`resolvePath`).
+- Writes are resolved against the review directory and must stay inside it (`resolveReviewPath`).
 
-This prevents path traversal outside the project directory.
+This prevents path traversal outside the project or review directory. For example, a request attempting to access `../some-external-file` is rejected with an IllegalArgumentException, which the tool method catches and returns as an error string.
 
-For example, a request attempting to access files outside the project root should be rejected.
-
-This is important because the customisation agent has file write capability.
+Because all write tools go through `resolveReviewPath`, the agent cannot write to the original project files.
 
 ## Logging
 
@@ -86,15 +87,20 @@ The cleanReviewDirectory method removes all existing files and subdirectories fr
 The method:
 
 - checks whether the review directory exists
-- if it exists, traverses and deletes all files and subdirectories inside the review folder safely
-- logs the cleanup operation
+- if it exists, traverses and deletes all files and subdirectories inside the review folder, leaving the review directory itself in place
+- clears the writable / DOS read-only flag on a path if a first delete attempt fails, then retries
+- logs a warning for any individual path that still cannot be deleted, and continues
 - returns a success message indicating the review folder content was removed, or that the folder did not exist
 
-If an exception occurs during deletion, it logs the error and returns an error message.
+If an exception occurs during traversal, it logs the error and returns an error message starting with `ERROR cleaning review directory`.
+
+`cleanReviewFolder()` and `clearReviewDirectory()` are aliases that call `cleanReviewDirectory()`.
+
+This method is not annotated with `@Tool`, so the AI model cannot call it.
 
 ### Typical Use
 
-The customisation agent or orchestrator calls this method before writing any new content or documentation to ensure a clean state for human review.
+`CustomisationAgentService` calls this method at the start of both the AI workflow and the deterministic fallback workflow, before any new content or documentation is written, so the review folder only ever contains the output of the latest run.
 
 ## hasReviewFiles
 
@@ -132,11 +138,13 @@ src/main/java/com/reedmanit/CustomisationAgent/task/Task.java
 The method:
 
 - resolves the relative path against the project root
-- checks whether the file exists
+- if the file does not exist there, checks for the same path in the review folder
 - reads the file as UTF-8 text
 - returns the file content as a string
 
-If the file does not exist, it returns an error message.
+The review folder fallback lets the agent read back new files it has staged that do not exist in the original project.
+
+If the file does not exist in either location, it returns an error message.
 
 If an exception occurs, it logs the error and returns an error message.
 
@@ -165,7 +173,7 @@ replacementBlock is the new text that should replace the target block.
 The method:
 
 - resolves the target path in the review folder and the original path in the project root
-- checks whether the file exists in the review folder or the project root
+- uses the staged copy in the review folder if one exists, otherwise the original file, so repeated changes to the same file build on each other
 - reads the file as UTF-8 text
 - normalises Windows line endings to Unix-style line endings
 - normalises the target block and replacement block in the same way
@@ -184,6 +192,8 @@ If an exception occurs, it logs the error and returns an error message.
 ### Typical Use
 
 The customisation agent can use this method to make targeted modifications (such as adding entity fields or UI elements) staged in the review directory for human verification.
+
+The current system prompt in CustomisationAgentService directs the model to use `writeFile` with full file content instead, because small local models often fail to reproduce the exact target block that `applyCodeChange` requires. The tool remains available to the model.
 
 ## writeFile
 
@@ -213,7 +223,9 @@ If an exception occurs, it logs the error and returns an error message.
 
 ### Typical Use
 
-The customisation agent uses this method to stage full new files or complete updated files in the review folder for human inspection.
+The customisation agent uses this method to stage full new files or complete updated files in the review folder for human inspection. It is the write tool the system prompt tells the model to use.
+
+The path mirrors the original project layout, so `src/main/java/.../Task.java` is written to `review/src/main/java/.../Task.java`. A leading `review/` or `./review/` in the path is stripped, so files are not nested in `review/review/`.
 
 ## writeDocumentation
 
@@ -310,9 +322,11 @@ If the process does not finish within that time, it is forcibly stopped and an e
 
 ### Typical Use
 
-The customisation agent uses this method during the verification step after applying code changes.
+The deterministic fallback workflow calls this method to run `TaskRepositoryTest`.
 
-It helps confirm whether the modified application still builds and passes tests.
+The tool is also available to the AI model, but the current system prompt does not ask the model to run tests.
+
+Note that the tests run against the original project source, not the staged files in the review folder, so they do not verify the proposed changes.
 
 ## completeCustomisation
 
@@ -331,7 +345,7 @@ The method:
 
 ### Typical Use
 
-The customisation agent should call this after it has finished making changes and running verification.
+The customisation agent should call this as its final tool call, after it has staged its changes and written the documentation.
 
 The returned message can be shown to the user through the customisation API or web page.
 
@@ -347,11 +361,21 @@ This is useful for tests or diagnostics.
 
 It allows other code to confirm which root directory file operations are using.
 
+## getReviewDir
+
+getReviewDir()
+
+The getReviewDir method returns the absolute, normalised review directory path that write operations use.
+
+### Typical Use
+
+Tests use this to locate and assert on staged files.
+
 ## resolvePath
 
 resolvePath(String relativePath)
 
-The resolvePath method is a private helper used by all file operations.
+The resolvePath method is a private helper used when reading original project files.
 
 It is responsible for safely converting a relative path into an absolute normalised path under the project root.
 
@@ -374,7 +398,30 @@ It prevents callers from using paths such as:
 
 ../some-external-file
 
-to read or write files outside the project.
+to read files outside the project.
+
+## resolveReviewPath
+
+resolveReviewPath(String relativePath)
+
+The resolveReviewPath method is a private helper used by every operation that writes a file, and by the review folder fallback in readFile and applyCodeChange.
+
+### Behaviour
+
+The method:
+
+- converts backslashes to forward slashes
+- strips a leading `review/` or `./review/` prefix, since models often include it
+- resolves the remaining path against the review directory
+- normalises the result
+- checks that the resolved path still starts with the review directory
+- returns the resolved path
+
+If the resolved path would escape the review directory, it throws an IllegalArgumentException.
+
+### Security Role
+
+This method is what guarantees that the agent can only write inside the review folder and never to the original project files.
 
 ## Error Handling Strategy
 
@@ -388,8 +435,11 @@ Typical error responses include:
 
 - ERROR: File not found
 - ERROR reading file
+- ERROR: Target block not found
 - ERROR applying code change
 - ERROR writing file
+- ERROR writing documentation
+- ERROR cleaning review directory
 - ERROR executing tests
 - ERROR: Test execution timed out
 
@@ -409,9 +459,18 @@ However, after replacement, the updated file is written using the normalised LF 
 
 ## Tool Annotation Usage
 
-Several methods are annotated as tools.
+The following methods are annotated as tools and exposed to the AI model:
 
-These annotations describe what each tool does and what each parameter means.
+- readFile
+- applyCodeChange
+- writeFile
+- writeDocumentation
+- executeTestSuite
+- completeCustomisation
+
+cleanReviewDirectory (and its aliases), hasReviewFiles, getProjectRoot and getReviewDir are not tools. They are called directly by Java code.
+
+The annotations describe what each tool does and what each parameter means.
 
 This allows Spring AI to expose these Java methods as callable tools to the chat model.
 
@@ -421,25 +480,24 @@ The tool descriptions are important because they guide the AI model when decidin
 
 A typical customisation workflow using this class is:
 
-1. Read relevant files with readFile.
-2. Decide what needs to change.
-3. Apply targeted changes using applyCodeChange or write updated files using writeFile.
-4. Run tests using executeTestSuite.
-5. Complete the workflow using completeCustomisation.
+1. The orchestrator cleans the review folder with cleanReviewDirectory.
+2. The agent reads relevant files with readFile.
+3. The agent writes updated files to the review folder using writeFile (or applyCodeChange).
+4. The agent writes DOCUMENTATION.md to the review folder using writeDocumentation.
+5. The agent completes the workflow using completeCustomisation.
+6. The orchestrator confirms that files were staged using hasReviewFiles.
 
 ## Example Workflow
 
-For a feature request such as adding a task description, the customisation agent might:
+For a feature request such as adding a task description, the customisation agent, following the order in the system prompt, would:
 
-1. Read the task entity file.
-2. Add a taskDescription field.
-3. Read the task controller tests.
-4. Add or update tests for the new field.
-5. Read the task creation HTML page.
-6. Add a Task Description textarea.
-7. Update JavaScript to submit the description.
-8. Run Maven tests.
-9. Return a completion summary.
+1. readFile `task/Task.java`, then writeFile the entity with a new taskDescription field.
+2. readFile `task/TaskController.java`, then writeFile it if it needs changes.
+3. readFile `static/index.html`, then writeFile the page with a Task Description textarea and updated JavaScript that submits the description.
+4. writeDocumentation `DOCUMENTATION.md` describing the changes.
+5. completeCustomisation with a short summary.
+
+A human then reviews the files in `review/` and copies the approved changes into `src/`.
 
 ## Design Strengths
 
@@ -448,9 +506,10 @@ CustomisationTools has several useful design characteristics:
 - simple public API
 - clear tool descriptions
 - UTF-8 file handling
-- project-root based path resolution
+- project-root based path resolution for reads
+- review-directory based path resolution for writes, so original files are never overwritten
 - path traversal protection
-- support for temporary test directories
+- support for temporary project and review directories in tests
 - Maven wrapper support
 - test timeout handling
 - readable success and error messages
@@ -460,37 +519,38 @@ CustomisationTools has several useful design characteristics:
 The class also has some limitations:
 
 - applyCodeChange requires exact text matches
-- writeFile overwrites entire files
+- writeFile replaces the entire staged file
+- executeTestSuite runs against the original source, not the staged review files
 - test execution timeout is fixed at 120 seconds
 - Maven output summary is basic
 - errors are returned as strings rather than structured objects
-- no approval step is required before writing files
-- no rollback mechanism is provided
+- there is no tool for applying approved review files to the project; this is a manual step
+- the review folder is cleared on every run, so unapplied changes from a previous run are lost
 - no source control integration is provided
-- no concurrency protection is provided if multiple customisations run at once
+- no concurrency protection is provided if multiple customisations run at once, which would share the same review folder
 
 ## Possible Future Improvements
 
 Possible improvements include:
 
 - returning structured result objects instead of plain strings
-- adding a dry-run mode
-- adding a diff preview before writes
-- adding backup file creation before overwriting
+- generating a diff between the original and staged files
+- adding a step to apply approved review files to the project
+- running tests against the staged changes, for example in a copy of the project
+- using a separate review folder per run instead of clearing a shared one
 - adding Git branch or commit integration
 - adding configurable test timeouts
 - adding support for running different Maven goals
 - adding support for Gradle projects
 - adding more flexible patch-based editing
-- adding validation for file types that can be modified
-- adding an allowlist of editable directories
+- adding validation for file types that can be staged
+- adding an allowlist of readable directories
 - adding audit logs for every file change
-- adding rollback support
 - adding concurrency locking around write operations
 
 ## Security Considerations
 
-This class can read and write project files and execute Maven tests.
+This class can read any file under the project root, write files into the review folder, delete the review folder's contents, and execute Maven tests.
 
 That means it should be treated as a powerful development-time tool.
 
@@ -501,9 +561,8 @@ Recommended safeguards include:
 - authentication before customisation requests can be submitted
 - authorisation to restrict who can trigger code changes
 - input validation for specifications and acceptance criteria
-- directory allowlists for file modifications
-- read-only mode for review
-- human approval before applying changes
+- restricting which files the agent can read, as it can currently read configuration and other sensitive files under the project root
+- human approval before applying staged changes (currently enforced by the manual copy step)
 - audit logging
 - sandboxed execution
 - source control isolation
@@ -511,18 +570,24 @@ Recommended safeguards include:
 
 ## Testing Considerations
 
-The constructor that accepts a project root is useful for testing.
+The constructors that accept a project root and a review directory are useful for testing.
 
-Tests can create a temporary directory and pass it into CustomisationTools.
+Tests can create a temporary directory with JUnit `@TempDir` and pass it into CustomisationTools, either as the project root or as the review directory.
+
+`CustomisationAgentServiceTest`, for example, uses `new CustomisationTools(Paths.get("."), reviewDir)` so it reads the real project files but stages output in a temporary directory, never touching the real `review` folder.
 
 This allows tests to verify read, write, and code replacement behaviour without modifying the real project.
 
 Important behaviours to test include:
 
-- writing and reading a file
+- writing a file to the review folder and reading it back
+- confirming the original file is unchanged after a write
 - applying a code change successfully
 - returning an error when a file does not exist
-- rejecting path traversal attempts
+- rejecting path traversal attempts for reads and writes
+- stripping a leading `review/` prefix from write paths
+- cleaning the review directory
+- hasReviewFiles before and after a write
 - completing a customisation with a summary
 - handling missing target blocks
 - creating parent directories when writing files
@@ -544,6 +609,6 @@ On Unix-like systems, the Maven wrapper may need executable permissions.
 
 CustomisationTools is the operational toolset used by the customisation agent.
 
-It provides controlled file access, code replacement, file writing, Maven test execution, and customisation completion reporting.
+It provides controlled read access to the project, review folder management, staging of code changes and documentation in the review folder, Maven test execution, and customisation completion reporting.
 
-It is central to the customisation workflow because it turns the agent's planned changes into real project modifications and verification steps.
+It is central to the customisation workflow because it turns the agent's planned changes into staged files that a human can review before they are applied to the project.

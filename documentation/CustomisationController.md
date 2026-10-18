@@ -68,10 +68,16 @@ The endpoint returns a JSON response body with the following field:
 
 The result field contains the message returned by CustomisationAgentService.
 
-Example response body:
+Example success response body (HTTP 200 OK):
 
 {
 "result": "CUSTOMISATION_COMPLETED: Task description support added and tests passed."
+}
+
+Example failure response body (HTTP 500 Internal Server Error):
+
+{
+"result": "ERROR: AI customisation completed without writing any files to the review folder."
 }
 
 ## Dependencies
@@ -111,9 +117,7 @@ The request contains:
 
 ## Method Behaviour
 
-The method reads the specification and acceptance criteria from the request.
-
-It then calls:
+The method logs the incoming specification and acceptance criteria, then calls:
 
 customisationAgentService.executeWithAi(specification, acceptanceCriteria)
 
@@ -121,7 +125,9 @@ The service returns a result string.
 
 The controller wraps that result string in a CustomisationResponse object.
 
-Finally, it returns HTTP 200 OK with the response body.
+If the result starts with `ERROR`, the controller logs a warning and returns HTTP 500 Internal Server Error with the response body. This covers cases where the AI call throws an exception, or the model finishes without staging any files in the review folder.
+
+Otherwise, it returns HTTP 200 OK with the response body.
 
 ## Method Output
 
@@ -131,7 +137,9 @@ ResponseEntity<CustomisationResponse>
 
 A successful request returns HTTP 200 OK.
 
-The JSON response contains the customisation result.
+A failed customisation returns HTTP 500 Internal Server Error.
+
+In both cases the JSON response contains the customisation result, so the client can display the error message returned by the service.
 
 ## CustomisationRequest Record
 
@@ -196,6 +204,8 @@ A successful response may look like this:
 "result": "CUSTOMISATION_COMPLETED: Task description support added successfully."
 }
 
+The request is synchronous. Because the local model performs several tool calls before returning, the response can take some time.
+
 ## Example Use Case
 
 A user opens the customisation screen in the browser.
@@ -214,7 +224,7 @@ When the user submits the form, the browser sends a POST request to:
 
 /api/customisations
 
-The controller receives the request, calls the customisation service, and returns the service result.
+The controller receives the request, calls the customisation service, and returns the service result. The proposed changes and a `DOCUMENTATION.md` file are staged in the `review` folder for the user to inspect.
 
 ## Relationship With The UI
 
@@ -248,15 +258,20 @@ This separation keeps responsibilities clear:
 
 This controller can be tested using a web MVC test.
 
-A typical test should:
+`CustomisationControllerTest` uses a WebMvcTest for CustomisationController with a mocked CustomisationAgentService.
 
-- start a WebMvcTest for CustomisationController
-- mock CustomisationAgentService
-- submit a POST request to /api/customisations
-- provide a JSON request body
-- verify that the response status is 200 OK
-- verify that the JSON response contains the expected result
-- verify that CustomisationAgentService.executeWithAi was called with the expected specification and acceptance criteria
+The success test:
+
+- submits a POST request to /api/customisations with a JSON request body
+- verifies that the response status is 200 OK
+- verifies that the JSON response contains the expected result
+- verifies that CustomisationAgentService.executeWithAi was called with the expected specification and acceptance criteria
+
+The failure test (`shouldReturnServerErrorWhenCustomisationFails`):
+
+- mocks the service to return an `ERROR: ...` result
+- verifies that the response status is 500 Internal Server Error
+- verifies that the JSON response contains the error message
 
 ## Validation Considerations
 
@@ -275,24 +290,24 @@ Validation could be added using Jakarta Bean Validation annotations and request 
 
 ## Error Handling Considerations
 
-The current controller assumes that the service returns a result string.
+CustomisationAgentService reports failures by returning a result string starting with `ERROR` rather than throwing. The controller detects this prefix, logs a warning, and returns HTTP 500 Internal Server Error with the error message in the `result` field.
 
-If the service throws an exception, Spring will handle it using default error handling unless a custom exception handler is added.
+If the service does throw an exception, Spring will handle it using default error handling unless a custom exception handler is added.
+
+Relying on a string prefix is simple but fragile, because any change to the service's error text could change the HTTP status.
 
 Possible improvements include:
 
-- returning a structured error response
+- returning a structured error response with a status field
+- replacing the string prefix check with a status enum or exception from the service
 - adding a global exception handler
 - mapping validation errors to HTTP 400 Bad Request
-- mapping unexpected service failures to HTTP 500 Internal Server Error
-- including a user-friendly error message
-- logging request failures
 
 ## Security Considerations
 
 This endpoint can trigger application customisation.
 
-Depending on how the service and tools are configured, this may result in source files being changed and tests being executed.
+This results in files being staged in the review folder, project files being read by the AI model, and potentially tests being executed. The original source files are not changed.
 
 Because of this, the endpoint should be protected before being used outside a local development environment.
 
@@ -322,7 +337,8 @@ Current limitations include:
 
 - no request validation
 - no authentication
-- no custom error response format
+- no custom error response format beyond the HTTP 500 status and the error text
+- error detection depends on the `ERROR` prefix of the service result
 - no asynchronous job tracking
 - no request ID
 - no customisation history
@@ -346,8 +362,7 @@ Possible future improvements include:
 - add structured error handling
 - add OpenAPI documentation
 - add endpoint tests for invalid requests
-- add endpoint tests for service failures
-- add logging around incoming customisation requests
+- add endpoint tests for exceptions thrown by the service
 - add correlation IDs for tracing
 
 ## Suggested Documentation File Name
@@ -360,6 +375,6 @@ documentation/CustomisationController.md
 
 CustomisationController provides the REST API entry point for customising the application.
 
-It accepts a specification and acceptance criteria in JSON format, delegates execution to CustomisationAgentService, and returns the resulting customisation message to the client.
+It accepts a specification and acceptance criteria in JSON format, delegates execution to CustomisationAgentService, and returns the resulting customisation message to the client, with HTTP 200 OK on success and HTTP 500 Internal Server Error when the service reports an error.
 
 It is intentionally simple and acts as the bridge between the web/API layer and the customisation agent service.

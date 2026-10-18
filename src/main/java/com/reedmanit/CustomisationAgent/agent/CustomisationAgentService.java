@@ -44,20 +44,24 @@ public class CustomisationAgentService {
             log.debug("Configuring ChatClient with default tools and system prompt...");
             ChatClient chatClient = chatClientBuilder.get()
                     .defaultTools(tools)
+                    // Small local models tend to narrate a plan or print tool calls as text instead of
+                    // invoking them, so the prompt insists on one real tool call per reply.
                     .defaultSystem("""
-                        You are a Software Customisation AI Agent for a Spring Boot application.
-                        IMPORTANT: Do NOT overwrite existing project files directly.
-                        Instead, create and write all new and modified code into the separate review folder using the writeFile or applyCodeChange tools so that it can be reviewed by a human before implementing the changes.
-                        In addition, you MUST generate and write a markdown documentation file in the review directory (e.g. DOCUMENTATION.md) using the writeDocumentation tool describing what has been changed and what the new code does.
-                        You MUST execute tool calls to write the staged files and documentation to disk before completing.
+                        You are a Software Customisation AI Agent for a Spring Boot application. You change code ONLY by calling tools.
 
-                        When given a customer specification and acceptance criteria, generate and execute the plan:
-                        1. Storage/Database Layer: Read the existing JPA entities with readFile and write updated entity code to the review directory using writeFile or applyCodeChange.
-                        2. API/Controller Layer: Read existing controllers/endpoints with readFile and write updated/new controllers to the review directory using writeFile or applyCodeChange.
-                        3. UI Layer: Read existing HTML/JS views with readFile and write updated views to the review directory using writeFile or applyCodeChange.
-                        4. Documentation: Generate and write a markdown documentation file (DOCUMENTATION.md) in the review folder using writeDocumentation explaining what was changed and what the new code does.
-                        5. Verification: Run the test suite if appropriate using executeTestSuite.
-                        6. Completion: Call completeCustomisation when done.
+                        Rules:
+                        - Call exactly ONE tool per reply using the tool-calling interface, then wait for its result.
+                        - NEVER write tool calls, JSON or a plan as text. Do not describe what you will do; just call the next tool.
+                        - Always readFile a file before changing it. Never guess file contents.
+                        - Write changed files with writeFile (full new file content) into the review folder. Never modify original files.
+
+                        Order of work:
+                        1. readFile src/main/java/com/reedmanit/CustomisationAgent/task/Task.java, then writeFile the updated entity.
+                        2. readFile src/main/java/com/reedmanit/CustomisationAgent/task/TaskController.java, then writeFile it if it needs changes.
+                        3. readFile src/main/resources/static/index.html, then writeFile the updated page.
+                        4. writeDocumentation DOCUMENTATION.md explaining what changed and what the new code does.
+                        5. completeCustomisation with a short summary.
+                        Only after completeCustomisation may you reply with plain text.
                         """)
                     .build();
 
@@ -68,7 +72,7 @@ public class CustomisationAgentService {
                 Acceptance Criteria:
                 %s
 
-                Please execute the customisation plan now using your tools, creating the new code and markdown documentation in the review folder.
+                Start now by calling the first tool.
                 """, specification, acceptanceCriteria);
 
             log.debug("Sending prompt to AI ChatClient:\n{}", prompt);

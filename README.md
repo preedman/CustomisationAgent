@@ -2,7 +2,7 @@
 
 CustomisationAgent is a Spring Boot application that demonstrates an AI-assisted software customisation workflow.
 
-The application includes a simple task tracker and a customisation interface where a user can submit a specification and acceptance criteria. The customisation agent can then use those details to update the application and verify the result.
+The application includes a simple task tracker and a customisation interface where a user can submit a specification and acceptance criteria. The customisation agent uses a local LLM (via Spring AI and Ollama) to read the existing code and stage the proposed changes, together with markdown documentation, in a separate `review` folder for a human to check before anything is applied to the real source tree.
 
 ## Features
 
@@ -12,9 +12,12 @@ The application includes a simple task tracker and a customisation interface whe
 - REST API for task creation and retrieval
 - REST API for submitting customisation requests
 - Web screen for entering customisation specifications
-- Spring AI integration using Ollama
-- Review-first customisation tools for staging changes into a dedicated `review` directory without overwriting existing files
-- Generation of markdown documentation describing what was changed and what the new code does
+- Spring AI integration using Ollama with tool calling
+- Review-first customisation: the agent writes changed files into a dedicated `review` directory and never overwrites the original project files
+- The `review` directory is cleaned at the start of every customisation run, so it only ever contains the output of the latest request
+- Generation of markdown documentation (`review/DOCUMENTATION.md`) describing what was changed and what the new code does
+- Detection of runs where the model finishes without staging any files, reported as an error with HTTP 500
+- Deterministic fallback orchestrator when no AI chat client is configured
 - Maven test execution and customisation completion reporting
 
 ## Technology Stack
@@ -28,6 +31,7 @@ The application includes a simple task tracker and a customisation interface whe
 - H2 Database
 - Maven
 - JUnit 5
+
 ## Documentation
 
 Additional project documentation is available in the `documentation` folder:
@@ -35,8 +39,6 @@ Additional project documentation is available in the `documentation` folder:
 - [CustomisationAgentService](documentation/CustomisationAgentService.md) - documents the main customisation orchestration service.
 - [CustomisationController](documentation/CustomisationController.md) - documents the REST API used to submit customisation requests.
 - [CustomisationTools](documentation/CustomisationTools.md) - documents the tool operations used by the customisation agent.
-- 
-
 
 ## Running the Application
 
@@ -74,6 +76,62 @@ This screen allows users to enter:
 - acceptance criteria
 
 The request is submitted to the customisation API.
+
+## How the Customisation Agent Works
+
+When a customisation request is received, `CustomisationAgentService.executeWithAi` runs the following steps:
+
+1. **Clean the review folder** - any content left in `review/` from a previous run is deleted.
+2. **Run the AI tool loop** - a Spring AI `ChatClient` is built with `CustomisationTools` registered as tools and a system prompt that tells the model to work only through tool calls, one tool call per reply, and to always read a file before changing it. The model is directed to work in this order:
+    1. Read `task/Task.java` and write the updated entity.
+    2. Read `task/TaskController.java` and write it if it needs changes.
+    3. Read `static/index.html` and write the updated page.
+    4. Write `DOCUMENTATION.md` explaining what changed and what the new code does.
+    5. Call `completeCustomisation` with a short summary.
+3. **Verify the output** - after the model finishes, the service checks that at least one file was written to `review/`. If nothing was staged, the request fails with `ERROR: AI customisation completed without writing any files to the review folder.`
+4. **Return the result** - successful responses are prefixed with `CUSTOMISATION_COMPLETED`. Any exception during the AI call is caught and returned as `ERROR: AI customisation execution failed: ...`.
+
+The system prompt is deliberately strict because small local models tend to narrate a plan or print tool calls as plain text instead of actually invoking the tools.
+
+If no `ChatClient.Builder` is available (for example, Spring AI is not configured), the service falls back to `executeUrgentTaskCustomisation`, a deterministic orchestrator that stages an "Urgent Task" change to `Task.java` and `index.html`, writes documentation, runs `TaskRepositoryTest`, and completes the customisation without calling an LLM.
+
+### Agent Tools
+
+The following tools in `CustomisationTools` are exposed to the model:
+
+| Tool | Description |
+|------|-------------|
+| `readFile` | Reads a file by path relative to the project root, falling back to the review folder if the file only exists there. |
+| `writeFile` | Writes the full content of a new or modified file into the review folder, mirroring the original relative path. |
+| `applyCodeChange` | Replaces an exact code block in a file and writes the result into the review folder. If the file has already been staged, the staged copy is used as the starting point. |
+| `writeDocumentation` | Writes a markdown file into the review folder (defaults to `DOCUMENTATION.md`). |
+| `executeTestSuite` | Runs `mvn test` (using the Maven wrapper if present), optionally for a single test class, with a 120 second timeout, and returns a summary of the results. |
+| `completeCustomisation` | Marks the customisation as complete and returns `CUSTOMISATION_COMPLETED: <summary>`. |
+
+Paths are resolved safely: any path that would escape the project root or the review folder is rejected. Paths passed with a leading `review/` prefix are normalised so files are not nested in `review/review/`.
+
+### Reviewing Staged Changes
+
+After a successful run, the `review` folder mirrors the project layout, for example:
+
+    review
+      DOCUMENTATION.md
+      src
+        main
+          java
+            com/reedmanit/CustomisationAgent/task
+              Task.java
+          resources
+            static
+              index.html
+
+To apply a customisation:
+
+1. Read `review/DOCUMENTATION.md` and inspect the staged files.
+2. Copy or merge the approved files from `review/` into `src/`.
+3. Run the test suite to verify the change.
+
+Note that the next customisation request will clear the review folder, so apply or save any changes you want to keep first.
 
 ## Task API
 
@@ -121,11 +179,19 @@ Example request:
       "acceptanceCriteria": "The UI should include a task description field. The description should be saved in the database and returned by the task API. The Maven test suite should pass."
     }
 
-Example response:
+Example success response (`200 OK`):
 
     {
       "result": "CUSTOMISATION_COMPLETED: ..."
     }
+
+If the agent fails, or finishes without writing any files to the review folder, the API returns `500 Internal Server Error` with the error in the body:
+
+    {
+      "result": "ERROR: AI customisation completed without writing any files to the review folder."
+    }
+
+The request is synchronous and can take some time, as the local model performs several tool calls before returning.
 
 ## Example Customisation Specification
 
@@ -166,17 +232,26 @@ Acceptance criteria:
 
 ## Ollama Setup
 
-This project uses Spring AI with Ollama.
+This project uses Spring AI with Ollama. The model must support tool calling.
 
-A suitable local model is:
+The default model is `qwen3:8b`:
 
-    ollama pull qwen2.5-coder:7b
+    ollama pull qwen3:8b
 
-The application can be configured in application.properties with:
+It is configured in `application.properties`:
 
-    spring.ai.ollama.chat.model=qwen2.5-coder:7b
+    spring.ai.ollama.chat.model=qwen3:8b
+    spring.ai.ollama.chat.num-ctx=16384
+
+`num-ctx` sets the context window in tokens. Ollama's small default context truncates the system prompt and tool definitions, which stops the model from calling the tools correctly, so keep this value large enough to hold the prompt, the tool definitions and the files being read.
+
+Alternative models (`qwen2.5-coder:7b`, `mistral`) are left commented out in `application.properties` and can be swapped in for comparison.
 
 Make sure Ollama is running before starting the application.
+
+## Logging
+
+Debug logging is enabled for the application package and for Spring AI / Ollama, so the prompt sent to the model, each tool call, and the model's response are visible in the console. Adjust the `logging.level.*` entries in `application.properties` to reduce the output.
 
 ## Running Tests
 
@@ -191,6 +266,8 @@ On Windows:
 Run a specific test class with:
 
     ./mvnw test -Dtest=CustomisationControllerTest
+
+`CustomisationAgentServiceTest` constructs `CustomisationTools` with a JUnit `@TempDir` as the review folder, so running the tests never touches the real project `review` directory. These tests do not require Ollama.
 
 ## H2 Console
 
@@ -210,12 +287,15 @@ Default password is blank.
 
 ## Project Structure
 
+    documentation                 - component documentation
+    review                        - staged changes from the latest customisation run
     src
       main
         java
           com.reedmanit.CustomisationAgent
             agent
               CustomisationAgentService
+              CustomisationAiResponse
               CustomisationController
               CustomisationTools
             task
@@ -236,7 +316,4 @@ Default password is blank.
 
 The customisation functionality is intended for local development and experimentation.
 
-Because the customisation agent can modify source files and run tests, it should not be exposed publicly without authentication, authorisation, validation, and other safety controls.
-
-
-
+Although the agent only writes into the `review` folder, it can read any file under the project root and run the Maven test suite. It should not be exposed publicly without authentication, authorisation, validation, and other safety controls.

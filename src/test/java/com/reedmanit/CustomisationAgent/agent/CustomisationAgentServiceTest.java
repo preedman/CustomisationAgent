@@ -1,12 +1,13 @@
 package com.reedmanit.CustomisationAgent.agent;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Optional;
 
@@ -19,14 +20,21 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-@SpringBootTest
 class CustomisationAgentServiceTest {
 
-    @Autowired
+    // Stage files in a temp directory so tests never touch the real project review folder
+    @TempDir
+    Path reviewDir;
+
     private CustomisationAgentService agentService;
 
-    @Autowired
     private CustomisationTools tools;
+
+    @BeforeEach
+    void setUp() {
+        tools = new CustomisationTools(Paths.get("."), reviewDir);
+        agentService = new CustomisationAgentService(tools, Optional.empty());
+    }
 
     @Test
     void shouldExecuteUrgentTaskCustomisationOrchestration() throws Exception {

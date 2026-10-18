@@ -45,4 +45,25 @@ public class CustomisationControllerTest {
         verify(customisationAgentService).executeWithAi(specification, acceptanceCriteria);
     }
 
+    @Test
+    void shouldReturnServerErrorWhenCustomisationFails() throws Exception {
+        String specification = "Add a due date field to tasks.";
+        String acceptanceCriteria = "Tasks can be created with a due date and tests pass.";
+        String expectedResult = "ERROR: AI customisation completed without writing any files to the review folder.";
+
+        when(customisationAgentService.executeWithAi(specification, acceptanceCriteria))
+                .thenReturn(expectedResult);
+
+        mockMvc.perform(post("/api/customisations")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "specification": "Add a due date field to tasks.",
+                                  "acceptanceCriteria": "Tasks can be created with a due date and tests pass."
+                                }
+                                """))
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.result").value(expectedResult));
+    }
+
 }
