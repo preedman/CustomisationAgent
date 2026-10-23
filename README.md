@@ -39,6 +39,7 @@ For a step-by-step guide to using the application's screens, see the [User Guide
 Additional project documentation is available in the `documentation` folder:
 
 - [User Guide](documentation/UserGuide.md) - explains how to use the Task Tracker and Customise Application screens, write a customisation request, understand the result, and apply the staged changes.
+- [Blog Post](documentation/BlogPost.md) - an architectural overview and deep dive into the CustomisationAgent application and design.
 - [CustomisationAgentService](documentation/CustomisationAgentService.md) - documents the main customisation orchestration service.
 - [CustomisationController](documentation/CustomisationController.md) - documents the REST API used to submit customisation requests.
 - [CustomisationTools](documentation/CustomisationTools.md) - documents the tool operations used by the customisation agent.

@@ -154,6 +154,7 @@ To apply the changes:
 ## Related Documentation
 
 - [README](../README.md) - setup, running the application and the APIs
+- [Blog Post](BlogPost.md) - architectural overview and technical deep-dive
 - [CustomisationAgentService](CustomisationAgentService.md) - how the customisation agent works
 - [CustomisationController](CustomisationController.md) - the customisation REST API
 - [CustomisationTools](CustomisationTools.md) - the tools the agent uses to read and write files
