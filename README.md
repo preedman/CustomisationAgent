@@ -4,6 +4,8 @@ CustomisationAgent is a Spring Boot application that demonstrates an AI-assisted
 
 The application includes a simple task tracker and a customisation interface where a user can submit a specification and acceptance criteria. The customisation agent uses a local LLM (via Spring AI and Ollama) to read the existing code and stage the proposed changes, together with markdown documentation, in a separate `review` folder for a human to check before anything is applied to the real source tree.
 
+For a step-by-step guide to using the application's screens, see the [User Guide](documentation/UserGuide.md).
+
 ## Features
 
 - Create tasks through a simple web UI
@@ -36,6 +38,7 @@ The application includes a simple task tracker and a customisation interface whe
 
 Additional project documentation is available in the `documentation` folder:
 
+- [User Guide](documentation/UserGuide.md) - explains how to use the Task Tracker and Customise Application screens, write a customisation request, understand the result, and apply the staged changes.
 - [CustomisationAgentService](documentation/CustomisationAgentService.md) - documents the main customisation orchestration service.
 - [CustomisationController](documentation/CustomisationController.md) - documents the REST API used to submit customisation requests.
 - [CustomisationTools](documentation/CustomisationTools.md) - documents the tool operations used by the customisation agent.
@@ -55,6 +58,8 @@ The application should start on:
     http://localhost:8080
 
 ## Main Screens
+
+The screens are summarised below. See the [User Guide](documentation/UserGuide.md) for screenshots and full instructions.
 
 ### Task Tracker
 
